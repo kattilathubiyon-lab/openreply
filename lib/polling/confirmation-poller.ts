@@ -22,7 +22,11 @@ import {
 import { getDMQueue, POSTBACK_JOB_NAME } from "@/lib/queue/client";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_PAGES = 4;
+// 25 conversations a page. A normal sweep reads one or two; the cap only matters
+// when catching up after an outage or a rate-limit pause.
+const MAX_PAGES = 60;
+// Meta allows two conversation calls per second and account.
+const pageGapMs = () => Number(process.env.CONFIRMATION_PAGE_GAP_MS ?? 600);
 const OVERLAP_MS = 2 * 60 * 1000;
 const BACKOFF_MS = 5 * 60 * 1000;
 const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80002, 80006]);
@@ -49,19 +53,32 @@ export function findConfirmations(
   conversations: InstagramConversation[],
   pending: PendingOpening[]
 ): Confirmation[] {
-  const found: Confirmation[] = [];
+  // Indexed, so a post with thousands of waiting people stays cheap to match.
+  const byId = new Map<string, PendingOpening[]>();
+  const byName = new Map<string, PendingOpening[]>();
+  const push = (
+    map: Map<string, PendingOpening[]>,
+    key: string,
+    p: PendingOpening
+  ) => map.set(key, [...(map.get(key) ?? []), p]);
+  for (const p of pending) {
+    push(byId, p.commenterId, p);
+    if (p.commenterName) push(byName, normalize(p.commenterName), p);
+  }
+
+  const found = new Map<string, Confirmation>();
   for (const conversation of conversations) {
     for (const message of conversation.messages?.data ?? []) {
       const { from, created_time: createdTime, message: text } = message;
       if (!from?.id || !createdTime || !text) continue;
       const at = Date.parse(createdTime);
-      const match = pending
+      const candidates =
+        byId.get(from.id) ??
+        (from.username ? byName.get(normalize(from.username)) : undefined) ??
+        [];
+      const match = candidates
         .filter(
           (p) =>
-            (p.commenterId === from.id ||
-              (p.commenterName &&
-                from.username &&
-                normalize(p.commenterName) === normalize(from.username))) &&
             // Instagram stores at most 20 characters of a button title.
             normalize(p.buttonLabel.slice(0, 20)) === normalize(text) &&
             // created_time has whole seconds.
@@ -76,17 +93,13 @@ export function findConfirmations(
         confirmedAt: new Date(at),
       };
       // Repeated taps on the same opening DM count once, by the earliest.
-      const earlier = found.find(
-        (f) =>
-          f.automationId === confirmation.automationId &&
-          f.userId === confirmation.userId
-      );
-      if (!earlier) found.push(confirmation);
-      else if (confirmation.confirmedAt < earlier.confirmedAt)
-        Object.assign(earlier, confirmation);
+      const key = `${confirmation.automationId}:${confirmation.userId}`;
+      const earlier = found.get(key);
+      if (!earlier || confirmation.confirmedAt < earlier.confirmedAt)
+        found.set(key, confirmation);
     }
   }
-  return found;
+  return [...found.values()];
 }
 
 const lastSweep = new Map<string, number>();
@@ -179,7 +192,9 @@ async function sweepAccount(
   if (context.provider !== "META") return;
 
   let after: string | undefined;
+  let covered = false;
   for (let page = 0; page < MAX_PAGES; page++) {
+    if (page > 0) await new Promise((done) => setTimeout(done, pageGapMs()));
     const result = await getRecentConversationPage(
       { accessToken: context.accessToken, unifiedLogin: context.unifiedLogin },
       account.instagramId,
@@ -192,9 +207,15 @@ async function sweepAccount(
     }
     const last = result.conversations.at(-1)?.updated_time;
     after = result.after;
-    if (!after || !last || Date.parse(last) < since) break;
+    if (!after || !last || Date.parse(last) < since) {
+      covered = true;
+      break;
+    }
   }
-  lastSweep.set(account.id, now);
+  // Only move on once everything back to the last sweep was read; otherwise the
+  // next sweep starts from the same point and nothing is skipped.
+  if (covered) lastSweep.set(account.id, now);
+  else console.warn("[Confirmation Poll] Page cap reached, will catch up");
 }
 
 async function enqueue(
