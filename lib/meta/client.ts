@@ -595,6 +595,38 @@ export interface InstagramConversation {
 }
 
 /**
+ * One page of recent conversations with a few messages each, newest first. Used
+ * by the confirmation poller; nothing read here is stored.
+ */
+export async function getRecentConversationPage(
+  auth: MetaAuth,
+  igUserId: string,
+  after?: string
+): Promise<{ conversations: InstagramConversation[]; after?: string }> {
+  const url = new URL(`${instagramGraphBase(auth)}/${igUserId}/conversations`);
+  url.searchParams.set("platform", "instagram");
+  url.searchParams.set(
+    "fields",
+    "participants,updated_time,messages.limit(6){id,message,from,created_time}"
+  );
+  url.searchParams.set("limit", "25");
+  if (after) url.searchParams.set("after", after);
+  const page = await handleResponse<{
+    data?: InstagramConversation[];
+    paging?: { next?: string; cursors?: { after?: string } };
+  }>(
+    await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${tokenOf(auth)}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+  );
+  return {
+    conversations: page.data ?? [],
+    after: page.paging?.next ? page.paging.cursors?.after : undefined,
+  };
+}
+
+/**
  * Load up to 50 recent conversations. A single broken field expansion can make
  * Meta reject the entire page with code 1 (upstream issue #60). Halve only those
  * failing pages until the affected conversation is isolated, then retain its
@@ -970,7 +1002,7 @@ export async function subscribeInstagramAccountToWebhooks(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        subscribed_fields: ["comments", "messages"],
+        subscribed_fields: ["comments", "messages", "messaging_postbacks"],
       }),
     }
   );
