@@ -1,6 +1,7 @@
 import { createDMWorker } from "@/lib/queue/dm-worker";
 import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
+import { pollConfirmations } from "@/lib/polling/confirmation-poller";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import os from "node:os";
 
@@ -48,10 +49,27 @@ async function poll() {
 setTimeout(() => void poll(), 10_000);
 const pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
 
+// Button taps on an opening DM. Meta does not deliver messaging webhooks to
+// Unified login apps with Standard Access, so the taps are read instead.
+const CONFIRMATION_POLL_MS = Number(
+  process.env.CONFIRMATION_POLL_INTERVAL_MS ?? 15_000
+);
+const confirmationTimer =
+  CONFIRMATION_POLL_MS > 0
+    ? setInterval(() => {
+        pollConfirmations().catch((error) => {
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          console.error("[DM Worker] Confirmation poll failed:", message);
+        });
+      }, CONFIRMATION_POLL_MS)
+    : undefined;
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
+  clearInterval(confirmationTimer);
   await worker.close();
   process.exit(0);
 }
