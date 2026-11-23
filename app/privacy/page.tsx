@@ -28,6 +28,7 @@ export default function PrivacyPage() {
             <li>deine Instagram-Kennung und deinen Nutzernamen</li>
             <li>den Inhalt, den Zeitpunkt und die Kennung deines Kommentars</li>
             <li>Direktnachrichten, die du an @biyon schickst oder von uns erhältst, sowie Reaktionen auf Schaltflächen darin</li>
+            <li>deine Bestätigung über die Schaltfläche in unserer ersten Nachricht und deren Zeitpunkt; um sie zu erkennen, rufen wir die jüngsten Unterhaltungen des Profils ab und werten nur Nachrichten von Personen aus, denen wir in den letzten 24 Stunden eine solche Nachricht geschickt haben, andere Inhalte speichern wir dabei nicht</li>
             <li>von Meta übermittelte technische Ereignisdaten und Protokolle über Versand, Fehler und Zustellung</li>
             <li>beim Klick auf einen Link aus unseren Nachrichten: Zeitpunkt, eine Prüfsumme (Hash) deiner IP-Adresse, eine pseudonyme Empfängerkennung, Angaben zu Browser und Gerät sowie die verweisende Seite</li>
             <li>bei Personen, die sich in der Verwaltung anmelden: E-Mail-Adresse und Sitzungsdaten</li>
